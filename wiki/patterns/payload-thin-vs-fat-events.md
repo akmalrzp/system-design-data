@@ -4,7 +4,7 @@ title: "Payload: thin vs fat events"
 tags: [unverified]
 sources: [osdm-integration-summary,api-design-for-system-integration]
 created: 2026-10-09
-updated: 2026-10-09
+updated: 2026-10-21
 ---
 
 # Payload: thin vs fat events
@@ -14,6 +14,6 @@ updated: 2026-10-09
 
 **Recommended split** (reasoned, not sourced): fat events for non-sensitive attributes; thin event plus authorised read for sensitive attributes ([payload-sensitive-fields](payload-sensitive-fields.md)).
 
-**Rule**: an owner publishes only data it owns. A broadcasts `unit_id` and `position_id`, not their names ([worked-example](../concepts/worked-example.md)).
+**Rule**: an owner publishes only its own facts. A reference to another owner's entity is published as its ID only, never with that owner's attributes. A broadcasts `unit_id` and `position_id`, not their names ([worked-example](../concepts/worked-example.md)).
 
 Envelope fields: [payload-event-envelope](payload-event-envelope.md). Keep a read API alongside either shape ([flow-events-plus-read-api](flow-events-plus-read-api.md)).

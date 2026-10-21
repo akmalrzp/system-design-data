@@ -28,7 +28,7 @@ updated: 2026-10-21
 - **Effective dating**: `effective_from` / `effective_to` on records whose meaning depends on a date.
 - **Anti-corruption layer**: adapter translating an external model into the local one. See [anti-corruption-layer](anti-corruption-layer.md).
 - **Data steward**: named person accountable for a reference set. See [external-reference-sets](../decisions/external-reference-sets.md).
-- **Outbox**: a table where the owner writes a change event in the same transaction as the business change; a relay publishes it later.
+- **Outbox / transactional outbox**: a table where the owner writes the change event in the same transaction as the business change; a relay publishes it later.
 - **Idempotent**: safe to apply more than once; the result is the same as applying it once.
 - **Version-guarded apply**: only apply an event when its version is newer than the last stored version.
 - **Reconciliation**: scheduled comparison between a consumer copy and the owner, followed by repair.
@@ -70,9 +70,7 @@ updated: 2026-10-21
 - **Hybrid module**: a module that owns some entities and consumes others.
 - **External reference set**: reference data coming from outside the organisation, such as region or classification codes.
 - **OSDM**: Organisasi & SDM, the Organisation & Human Resources domain used in this guide.
-- **Transactional outbox**: the pattern of writing business changes and outgoing event records in one database transaction.
 - **Read API**: endpoint used for lookup, bootstrap, and catch-up of current state.
-- **Attribute user**: a consumer that uses another module’s data as descriptive labels rather than structural definitions.
-- **Index user**: a consumer that uses another module’s ID as a business key or classification axis.
+- **Consumer type 1 (attribute user)**: a consumer that uses another module’s data as descriptive labels rather than structural definitions. See [consumer-attribute-user](../modules/consumer-attribute-user.md).
+- **Consumer type 2 (index user)**: a consumer that uses another module’s ID as a business key or classification axis. See [consumer-index-user](../modules/consumer-index-user.md).
 - **Projection holder**: a module that computes aggregate views from events without copying full master records.
-- **Processed event log**: a consumer's durable record of the event IDs or versions it has already applied.

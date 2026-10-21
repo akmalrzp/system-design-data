@@ -13,6 +13,7 @@ A consumer's read-only local copy of an owner's records.
 
 **Typical columns**
 - Local primary key, `source_id` (the owner's ID, unique), `source_version`, only the cached fields needed, `status`, `replaced_by`, `last_synced_at`.
+- `effective_from`, `effective_to` when the consumer validates effective-dated records against it ([consumer-index-user](../modules/consumer-index-user.md)).
 
 **Rules**
 - Written only by the apply path ([rule-idempotent-versioned-apply](../patterns/rule-idempotent-versioned-apply.md)); never edited by users or other processes.

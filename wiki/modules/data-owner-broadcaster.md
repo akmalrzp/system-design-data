@@ -21,7 +21,7 @@ updated: 2026-10-21
 - Field scoping per consumer for sensitive data ([payload-sensitive-fields](../patterns/payload-sensitive-fields.md)).
 
 **Must not**
-- Publish data it does not own (A publishes IDs of units, not unit names).
+- Publish data it does not own. It publishes its own facts; a reference to another owner's entity goes out as the ID only, never with that owner's attributes (A publishes `unit_id`, not the unit's name).
 - Expose its internal model or database.
 - Reuse or change an ID.
 

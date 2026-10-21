@@ -4,7 +4,7 @@ title: "Consumer type 2: reference data as index"
 tags: [proposal,unverified]
 sources: [osdm-integration-summary]
 created: 2026-10-09
-updated: 2026-10-12
+updated: 2026-10-21
 ---
 
 # Consumer type 2: reference data as index
@@ -14,7 +14,7 @@ updated: 2026-10-12
 Example: D stores "required employees per unit". `unit_id` identifies the requirement.
 
 **Design (same cache pattern as type 1, plus)**
-- Validate the referenced entity exists and is active before accepting a record.
+- Validate the referenced entity exists and is active before accepting a record; for effective-dated records, that it is valid over the record's effective period. This allows backdated corrections and forward planning ([rule-validate-ids-locally](../patterns/rule-validate-ids-locally.md)). The cache therefore keeps the entity's `effective_from` and `effective_to`.
 - Effective-date records (`effective_from`, `effective_to`) so they stay meaningful after the reference changes.
 - Treat owner lifecycle events as business events:
   - Inactive: flag the record for review or close it with `effective_to`.

@@ -194,7 +194,7 @@ Copies in consumers lag the owner. Design for it:
 - **Effective dating**: `effective_from` / `effective_to` on records whose meaning depends on a date.
 - **Anti-corruption layer**: adapter translating an external model into the local one. See [Anti-corruption layer](#anti-corruption-layer).
 - **Data steward**: named person accountable for a reference set. See [External reference sets](#external-reference-sets).
-- **Outbox**: a table where the owner writes a change event in the same transaction as the business change; a relay publishes it later.
+- **Outbox / transactional outbox**: a table where the owner writes the change event in the same transaction as the business change; a relay publishes it later.
 - **Idempotent**: safe to apply more than once; the result is the same as applying it once.
 - **Version-guarded apply**: only apply an event when its version is newer than the last stored version.
 - **Reconciliation**: scheduled comparison between a consumer copy and the owner, followed by repair.
@@ -236,12 +236,10 @@ Copies in consumers lag the owner. Design for it:
 - **Hybrid module**: a module that owns some entities and consumes others.
 - **External reference set**: reference data coming from outside the organisation, such as region or classification codes.
 - **OSDM**: Organisasi & SDM, the Organisation & Human Resources domain used in this guide.
-- **Transactional outbox**: the pattern of writing business changes and outgoing event records in one database transaction.
 - **Read API**: endpoint used for lookup, bootstrap, and catch-up of current state.
-- **Attribute user**: a consumer that uses another module’s data as descriptive labels rather than structural definitions.
-- **Index user**: a consumer that uses another module’s ID as a business key or classification axis.
+- **Consumer type 1 (attribute user)**: a consumer that uses another module’s data as descriptive labels rather than structural definitions. See [Consumer type 1: reference data as attributes](#consumer-attribute-user).
+- **Consumer type 2 (index user)**: a consumer that uses another module’s ID as a business key or classification axis. See [Consumer type 2: reference data as index](#consumer-index-user).
 - **Projection holder**: a module that computes aggregate views from events without copying full master records.
-- **Processed event log**: a consumer's durable record of the event IDs or versions it has already applied.
 
 <a id="worked-example"></a>
 
@@ -325,7 +323,7 @@ Record the result in the [Data dictionary and ADRs](#data-dictionary-and-adr) en
 - Field scoping per consumer for sensitive data ([Payload: sensitive fields](#payload-sensitive-fields)).
 
 **Must not**
-- Publish data it does not own (A publishes IDs of units, not unit names).
+- Publish data it does not own. It publishes its own facts; a reference to another owner's entity goes out as the ID only, never with that owner's attributes (A publishes `unit_id`, not the unit's name).
 - Expose its internal model or database.
 - Reuse or change an ID.
 
@@ -361,7 +359,7 @@ Contrast with [Consumer type 2: reference data as index](#consumer-index-user). 
 Example: D stores "required employees per unit". `unit_id` identifies the requirement.
 
 **Design (same cache pattern as type 1, plus)**
-- Validate the referenced entity exists and is active before accepting a record.
+- Validate the referenced entity exists and is active before accepting a record; for effective-dated records, that it is valid over the record's effective period. This allows backdated corrections and forward planning ([Rule: validate IDs against the local cache](#rule-validate-ids-locally)). The cache therefore keeps the entity's `effective_from` and `effective_to`.
 - Effective-date records (`effective_from`, `effective_to`) so they stay meaningful after the reference changes.
 - Treat owner lifecycle events as business events:
   - Inactive: flag the record for review or close it with `effective_to`.
@@ -569,6 +567,7 @@ A consumer's read-only local copy of an owner's records.
 
 **Typical columns**
 - Local primary key, `source_id` (the owner's ID, unique), `source_version`, only the cached fields needed, `status`, `replaced_by`, `last_synced_at`.
+- `effective_from`, `effective_to` when the consumer validates effective-dated records against it ([Consumer type 2: reference data as index](#consumer-index-user)).
 
 **Rules**
 - Written only by the apply path ([Rule: idempotent, version-guarded apply](#rule-idempotent-versioned-apply)); never edited by users or other processes.
@@ -769,7 +768,7 @@ Frequency: nightly as a starting point; tune to freshness needs. Standard practi
 
 **Recommended split** (reasoned, not sourced): fat events for non-sensitive attributes; thin event plus authorised read for sensitive attributes ([Payload: sensitive fields](#payload-sensitive-fields)).
 
-**Rule**: an owner publishes only data it owns. A broadcasts `unit_id` and `position_id`, not their names ([Worked example: modules A, B, C, D](#worked-example)).
+**Rule**: an owner publishes only its own facts. A reference to another owner's entity is published as its ID only, never with that owner's attributes. A broadcasts `unit_id` and `position_id`, not their names ([Worked example: modules A, B, C, D](#worked-example)).
 
 Envelope fields: [Payload: event envelope](#payload-event-envelope). Keep a read API alongside either shape ([Flow: events plus read API](#flow-events-plus-read-api)).
 
@@ -887,7 +886,7 @@ Cross-entity ordering (for example the unit exists before an assignment referenc
 
 ## Rule: validate IDs against the local cache
 
-Before accepting a write that references another module's entity, validate the ID against the local cache ([Cache of master reference (consumer)](#table-master-cache)): it exists and is active (or valid on the effective date).
+Before accepting a write that references another module's entity, validate the ID against the local cache ([Cache of master reference (consumer)](#table-master-cache)): it exists and is active (or, for an effective-dated record, valid over the record's effective period).
 
 - A validates `unit_id` and `position_id` against its cache of C before accepting an assignment.
 - D validates the unit before accepting a requirement.
@@ -916,7 +915,7 @@ To remove a field or endpoint:
 3. Watch usage until it reaches zero.
 4. Remove only then, and for incompatible changes publish a new major version.
 
-Release pipeline: a contract check blocks removals, renames, retypings and new required fields ([Rule: contract testing](#rule-contract-testing)). Related: [Rule: additive-only contract](#rule-additive-only-contract), [Decision: contract versioning style](#decision-contract-versioning-style).
+Release pipeline: a contract check (the spec diff in [Rule: contract testing](#rule-contract-testing)) blocks removals, renames, retypings and new required fields. Related: [Rule: additive-only contract](#rule-additive-only-contract), [Decision: contract versioning style](#decision-contract-versioning-style).
 
 <a id="rule-contract-testing"></a>
 
@@ -927,6 +926,10 @@ Catch breaking changes before release.
 - **Spec diffing in CI**: compare the new spec with the previous one; simplest when there are many or unknown consumers.
 - **Consumer-driven contract tests**: consumers record what they use and replay it against the owner; viable with one producer and one known consumer. Classic tools fit event-driven systems poorly.
 - **Bi-directional contract testing**: compares the owner's spec with consumers' recorded usage; lighter, weaker guarantees.
+
+**Default** (proposal): spec diffing in CI for request/response specs, plus the schema registry's compatibility check for events ([Rule: additive-only contract](#rule-additive-only-contract)). Add consumer-driven tests only for a critical owner-consumer pair. Bi-directional testing is not the default: it needs every consumer to publish its usage and a broker product.
+
+Limits of the default: a spec diff catches structural breaks (removed, renamed or retyped fields, new required fields), not a change of meaning; and it does not show which consumer uses a field, so watch usage before removing one ([Rule: deprecation and sunset](#rule-deprecation-and-sunset)).
 
 Choice by consumer count is an inference. Sources were secondary ([Source reliability](#source-reliability)).
 
