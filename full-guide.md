@@ -37,6 +37,7 @@ Technology-neutral guide for architects and developers. Generated from the atomi
   - [Crosswalk table](#table-crosswalk)
   - [Accountability options compared](#accountability-options)
   - [Accountability default (recommended)](#accountability-default)
+  - [Table naming convention](#table-naming-convention)
 - [3. Inter-system communication patterns](#guide-03-communication)
   - [Flow: events plus read API](#flow-events-plus-read-api)
   - [Flow: bootstrap and catch-up](#flow-bootstrap-and-catch-up)
@@ -192,6 +193,54 @@ Copies in consumers lag the owner. Design for it:
 - **Effective dating**: `effective_from` / `effective_to` on records whose meaning depends on a date.
 - **Anti-corruption layer**: adapter translating an external model into the local one. See [Anti-corruption layer](#anti-corruption-layer).
 - **Data steward**: named person accountable for a reference set. See [External reference sets](#external-reference-sets).
+- **Outbox**: a table where the owner writes a change event in the same transaction as the business change; a relay publishes it later.
+- **Idempotent**: safe to apply more than once; the result is the same as applying it once.
+- **Version-guarded apply**: only apply an event when its version is newer than the last stored version.
+- **Reconciliation**: scheduled comparison between a consumer copy and the owner, followed by repair.
+- **Bootstrap**: filling an empty cache from the owner’s read API or replay of current state.
+- **Catch-up**: fetching changes missed since a cursor or last event.
+- **Cursor pagination**: paging through a list using an opaque token rather than page numbers.
+- **Optimistic concurrency**: preventing lost updates by checking a version or ETag before writing.
+- **ETag / `If-Match`**: HTTP headers used for optimistic concurrency; a mismatch returns 412.
+- **Schema registry**: service that stores and enforces event schema compatibility.
+- **FULL / FULL_TRANSITIVE**: schema compatibility modes that allow either side to upgrade first.
+- **Thin event**: an event with only the identifier and change type; the consumer fetches details on demand.
+- **Fat event**: an event containing the data values the consumer needs without a follow-up call.
+- **Sensitive fields**: data such as salary or national identifiers that are not broadcast by default.
+- **Drift**: a lasting mismatch between a consumer copy and the owner.
+- **Lag**: the delay between an owner change and the consumer copy being updated.
+- **Placeholder**: a temporary local record for an unknown ID, resolved later.
+- **Snapshot**: a stored copy of referenced values so a document or report can reproduce the past.
+- **Lineage columns**: fields such as `source_version`, `updated_at`, and `last_synced_at` that show where a row came from.
+- **Processed-event log**: a consumer record of which event IDs or versions were already applied.
+- **Bitemporal history**: history tracking both valid time and recorded time.
+- **Event store**: a system where events are the source of truth.
+- **Saga**: a coordinated sequence of local transactions with compensating actions.
+- **Partition key**: the key used to keep related events in order, usually by entity ID.
+- **At-least-once delivery**: a message may be delivered more than once.
+- **Exactly-once delivery**: a message is processed once; this is not assumed across separate systems.
+- **Tolerant reader**: a consumer that ignores unknown fields and enum values.
+- **Deprecation / sunset**: headers or markers warning that a contract field or endpoint will be removed.
+- **Consumer-driven contract testing**: consumers record the responses they depend on and replay them against the owner.
+- **Bi-directional contract testing**: comparing the owner’s contract spec with the consumers’ recorded usage.
+- **Erasure**: removing or anonymising personal data when legally required.
+- **Anonymisation**: replacing personal data with nulls or placeholders.
+- **Data dictionary**: a record of each entity’s owner, fields, lifecycle, consumers, and contract.
+- **ADR**: architecture decision record, documenting context, options, decision, consequences, and date.
+- **SLO**: service-level objective, such as maximum acceptable lag.
+- **Dead-letter queue**: holding area for events that cannot be processed.
+- **Circuit breaker**: a pattern that stops calls to a failing dependency.
+- **mTLS / OAuth**: security mechanisms for service identity and authorisation.
+- **Business key**: a human-facing identifier such as employee number or unit code.
+- **Hybrid module**: a module that owns some entities and consumes others.
+- **External reference set**: reference data coming from outside the organisation, such as region or classification codes.
+- **OSDM**: Organisasi & SDM, the Organisation & Human Resources domain used in this guide.
+- **Transactional outbox**: the pattern of writing business changes and outgoing event records in one database transaction.
+- **Read API**: endpoint used for lookup, bootstrap, and catch-up of current state.
+- **Attribute user**: a consumer that uses another module’s data as descriptive labels rather than structural definitions.
+- **Index user**: a consumer that uses another module’s ID as a business key or classification axis.
+- **Projection holder**: a module that computes aggregate views from events without copying full master records.
+- **Processed event log**: a consumer's durable record of the event IDs or versions it has already applied.
 
 <a id="worked-example"></a>
 
@@ -606,6 +655,33 @@ Select per table type: [Master reference table (owner)](#table-master-reference)
 Upgrade to versioned or bitemporal history only when a requirement demands it. Retention of logs must be reconciled with erasure obligations ([Decision: delete policy and the erasure exception](#decision-delete-policy-and-erasure)).
 
 Options: [Accountability options compared](#accountability-options).
+
+<a id="table-naming-convention"></a>
+
+## Table naming convention
+
+Table names show which module owns a table, what kind of table it is, and which table it serves. The convention applies to the physical schema inside one module; it is not part of any public contract.
+
+**Pattern**
+
+| Table kind | Name | Example |
+|---|---|---|
+| Entity table (master reference, transaction, cache, projection) | `<Module>_<Entity>` | `Kmp_Kompetensi`, `Kmp_StandarKompetensiJabatan` |
+| Reference set (fixed list or [External reference sets](#external-reference-sets)) | `<Module>_Ref<Name>` | `Kmp_RefJenisKompetensi`, `Kmp_RefUrusan` |
+| Support table that exists only to serve one owner table | `<Module>_<Owner><Role>` | `Kmp_KompetensiLevel`, `Kmp_KompetensiLineage`, `Kmp_KompetensiChangeEvent`, `Kmp_StandarKompetensiJabatanLineage` |
+
+**Rules**
+- `Ref` is a prefix because it names a kind of table, not an owner.
+- A support table puts its owner's full name first and its role last. Sorted by name, an owner's tables sit together, and the role word stays fixed and searchable.
+- Use one role word per role across modules: `Level` (child rows of an aggregate), `Lineage` (`replaced_by` links for merge and split, see [Use case: merge](#uc-merge) and [Use case: split](#uc-split)), `ChangeEvent` (outbox, see [Flow: events plus read API](#flow-events-plus-read-api)), `History` (past versions, see [Accountability options compared](#accountability-options)).
+- Derived names follow the table name: the primary key column is `Id<Table>`, and constraints are `<kind><Module>_<Table>_<detail>` (`pkKmp_KompetensiLineage`, `fkKmp_KompetensiLineage_Lama`, `ixKmp_KompetensiLineage_Baru`).
+- A support table with its own business identity, which other tables reference on their own, is an entity table and takes `<Module>_<Entity>` (`Kmp_StandarKompetensiJabatan`, not `Kmp_JabatanStandarKompetensi`).
+
+**Why**: entity names in Indonesian put the main word first (`LevelKompetensi`, "level of kompetensi"); role words in English put it last (`KompetensiChangeEvent`). Mixing the two orders puts sibling tables in different places. The rule fixes the order whatever the language of the words.
+
+**Trade-off**: an owner-first name can differ from the business term (`KompetensiLevel` rather than `LevelKompetensi`). Keep the business term in the data dictionary entry ([Data dictionary and ADRs](#data-dictionary-and-adr)), not in the table name.
+
+**Example**: `outputs/hr_kompetensi_mssql.curr.sql` (Microsoft SQL Server, PascalCase) applies this convention.
 
 <a id="guide-03-communication"></a>
 
