@@ -4,7 +4,7 @@ title: "Technology requirements (neutral)"
 tags: [proposal]
 sources: [osdm-integration-summary,api-design-for-system-integration]
 created: 2026-10-09
-updated: 2026-10-09
+updated: 2026-10-21
 ---
 
 # Technology requirements (neutral)
@@ -14,10 +14,10 @@ The guide does not pick products. Choose any technology that provides these capa
 | Capability | Requirement | Example (illustrative) |
 |---|---|---|
 | Atomic change plus outbox | Business change and outbox record in one local transaction | Relational transaction with an outbox table |
-| Event channel | At-least-once delivery; ordering per entity key; retention long enough for catch-up; consumer-side offset or equivalent | A message broker or log |
+| Event channel | At-least-once delivery; ordering per entity key; retention long enough for catch-up and at least as long as a full bootstrap; consumer-side offset or equivalent | A message broker or log |
 | Schema registry / contract store | Enforce compatibility; stored versions; FULL or FULL_TRANSITIVE preferred | A schema registry |
 | Request/response contract | Machine-readable, reviewed before implementation | An OpenAPI document |
-| Read API | Lookup by ID; cursor-paginated list with `updated_after` | REST or RPC |
+| Read API | Lookup by ID; cursor-paginated list with `updated_after`, sorted by (`updated_at`, `id`) | REST or RPC |
 | Error format | Standard, machine-readable | `application/problem+json` |
 | Idempotency | Idempotency key policy for retried writes (documented by the team; the IETF draft expired) | Header-based key |
 | Concurrency | Optimistic concurrency on writes | ETag with `If-Match` (412 on mismatch) |

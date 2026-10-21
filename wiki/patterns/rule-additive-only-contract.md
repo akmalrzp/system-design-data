@@ -4,12 +4,12 @@ title: "Rule: additive-only contract"
 tags: [partly-verified]
 sources: [osdm-integration-summary,api-design-for-system-integration]
 created: 2026-10-09
-updated: 2026-10-09
+updated: 2026-10-21
 ---
 
 # Rule: additive-only contract
 
-**Safe changes**: add fields, endpoints, enum values.
+**Safe changes**: add optional fields (with a defined default or meaning when absent), endpoints, enum values.
 **Breaking changes**: remove, rename or retype a field; change resource names, value formats or defaults; add a new required field.
 
 Practices:

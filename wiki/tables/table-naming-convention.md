@@ -22,7 +22,7 @@ Table names show which module owns a table, what kind of table it is, and which 
 **Rules**
 - `Ref` is a prefix because it names a kind of table, not an owner.
 - A support table puts its owner's full name first and its role last. Sorted by name, an owner's tables sit together, and the role word stays fixed and searchable.
-- Use one role word per role across modules: `Level` (child rows of an aggregate), `Lineage` (`replaced_by` links for merge and split, see [uc-merge](../usecases/uc-merge.md) and [uc-split](../usecases/uc-split.md)), `ChangeEvent` (outbox, see [flow-events-plus-read-api](../patterns/flow-events-plus-read-api.md)), `History` (past versions, see [accountability-options](accountability-options.md)).
+- Use one role word per role across modules: `Level` (child rows of an aggregate), `Lineage` (`replaced_by` links for merge and split, see [uc-merge](../usecases/uc-merge.md) and [uc-split](../usecases/uc-split.md)), `ChangeEvent` (outbox, see [flow-events-plus-read-api](../patterns/flow-events-plus-read-api.md)), `History` (past versions, see [accountability-options](accountability-options.md)), `Crosswalk` (external or legacy codes, see [table-crosswalk](table-crosswalk.md)).
 - Derived names follow the table name: the primary key column is `Id<Table>`, and constraints are `<kind><Module>_<Table>_<detail>` (`pkKmp_KompetensiLineage`, `fkKmp_KompetensiLineage_Lama`, `ixKmp_KompetensiLineage_Baru`).
 - A support table with its own business identity, which other tables reference on their own, is an entity table and takes `<Module>_<Entity>` (`Kmp_StandarKompetensiJabatan`, not `Kmp_JabatanStandarKompetensi`).
 

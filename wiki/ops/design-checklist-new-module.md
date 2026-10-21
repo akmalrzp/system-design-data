@@ -4,7 +4,7 @@ title: "Design checklist for a new module"
 tags: [proposal]
 sources: [osdm-integration-summary,api-design-for-system-integration,author-decisions-2026-10-09]
 created: 2026-10-09
-updated: 2026-10-09
+updated: 2026-10-21
 ---
 
 # Design checklist for a new module
@@ -22,11 +22,12 @@ updated: 2026-10-09
 - [ ] Owner: ID format, versioning, outbox, events, read API, contract, sensitive-field scoping.
 - [ ] Consumer: apply path idempotent and version-guarded; adapter at the edge; unknown-ID handling.
 - [ ] Bootstrap and reconciliation planned.
+- [ ] Owner offline: the module keeps reading and validating from its cache; writes that need an unseen ID are rejected or held as pending, per business rule ([edge-case-owner-unavailable](../modules/edge-case-owner-unavailable.md)).
 
 **Lifecycle**
 - [ ] Statuses, `replaced_by`, effective dating defined; split/merge applicability decided.
 - [ ] Type 2 consumers have a review process for flagged records.
-- [ ] Erasure path defined ([decision-delete-policy-and-erasure](../decisions/decision-delete-policy-and-erasure.md)).
+- [ ] Erasure path defined, including a tracked purge job for logs, snapshots and backups ([decision-delete-policy-and-erasure](../decisions/decision-delete-policy-and-erasure.md)).
 
 **Governance**
 - [ ] Data dictionary entry and ADRs written ([data-dictionary-and-adr](data-dictionary-and-adr.md)).

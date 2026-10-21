@@ -184,10 +184,11 @@ Copies in consumers lag the owner. Design for it:
 - **Cache (of master)**: a consumer's read-only local copy. See [Cache of master reference (consumer)](#table-master-cache).
 - **Transaction table**: a consumer's or owner's own business records that reference IDs. See [Transaction table](#table-transaction).
 - **Projection**: derived data (for example counts per unit) built from events, not copied records. See [Projection table](#table-projection).
-- **Crosswalk**: mapping between internal IDs and external codes. See [Crosswalk table](#table-crosswalk).
+- **Crosswalk**: mapping between internal IDs and external or legacy-system codes. See [Crosswalk table](#table-crosswalk).
 - **Contract**: the published, versioned shape of API responses and events.
 - **Event envelope**: metadata fields on every event. See [Payload: event envelope](#payload-event-envelope).
 - **Version**: a monotonic number per record, increased on every change.
+- **Eventual consistency**: copies converge with the owner once changes stop and missed events are repaired by reconciliation; not a guarantee on its own. See [Eventual consistency and freshness](#eventual-consistency).
 - **Tombstone**: a retained marker that a record is deleted or inactive; here a versioned state, not an absence.
 - **`replaced_by`**: pointer from a retired record to its successor(s) after merge or split.
 - **Effective dating**: `effective_from` / `effective_to` on records whose meaning depends on a date.
@@ -317,7 +318,8 @@ Record the result in the [Data dictionary and ADRs](#data-dictionary-and-adr) en
 **Must provide**
 - Master reference tables ([Master reference table (owner)](#table-master-reference)).
 - A change feed: versioned events through a transactional outbox ([Flow: events plus read API](#flow-events-plus-read-api)).
-- A read API for lookup by ID and cursor-paginated catch-up by `updated_after`.
+- A read API for lookup by ID and cursor-paginated catch-up by `updated_after`, sorted by (`updated_at`, `id`) ([Flow: bootstrap and catch-up](#flow-bootstrap-and-catch-up)).
+- A crosswalk from legacy-system codes to its IDs, when records were migrated from a legacy system ([Crosswalk table](#table-crosswalk)).
 - A published, versioned, additive contract ([Rule: additive-only contract](#rule-additive-only-contract)).
 - Lifecycle states instead of hard delete ([Rule: deletes are explicit versioned states](#rule-deletes-as-state)), with `replaced_by` for merge and split.
 - Field scoping per consumer for sensitive data ([Payload: sensitive fields](#payload-sensitive-fields)).
@@ -482,6 +484,7 @@ Business keys (employee number, unit code) are human-meaningful and may be reiss
 Rules:
 - Join on IDs. Expose business keys as attributes only.
 - Enforce uniqueness of the business key in the owner, with effective dating if it can be reused over time.
+- Legacy-system codes are attributes too; use a [Crosswalk table](#table-crosswalk) in the owner when there are several legacy systems or the mapping changes over time.
 - External standard codes may be the key for external reference sets under the conditions in [External reference sets](#external-reference-sets).
 
 <a id="edge-case-divergent-reference-caches"></a>
@@ -569,9 +572,9 @@ A consumer's read-only local copy of an owner's records.
 
 **Rules**
 - Written only by the apply path ([Rule: idempotent, version-guarded apply](#rule-idempotent-versioned-apply)); never edited by users or other processes.
-- Apply only if event version is greater than `source_version`.
+- Apply only if event version is greater than `source_version`; insert when no row exists.
 - Stores deletion and inactive states, not absence ([Rule: deletes are explicit versioned states](#rule-deletes-as-state)).
-- Unknown IDs: placeholder row or lazy fetch.
+- Unknown IDs: placeholder row or lazy fetch. A placeholder row has no `source_version`, so the first real event or fetch always fills it.
 - Local extensions go in a separate table keyed by the owner's ID, not in the cache.
 
 **Accountability**: processed-event log (event ID or entity ID plus version, committed in the same transaction as the change) and reconciliation results ([Flow: reconciliation](#flow-reconciliation)). Lineage columns `source_version` and `last_synced_at` show which owner state the copy reflects.
@@ -588,7 +591,7 @@ A module's own business records: assignments, requirements, payroll runs. They r
 - Effective-date records whose meaning depends on time (`effective_from`, `effective_to`).
 - Append-only or versioned for records that must be auditable.
 
-**Snapshot or reference?** Store the reference when the current name is wanted; store a snapshot (value plus the source version) when the document must reproduce what was true at the time.
+**Snapshot or reference?** Store the reference when the current name is wanted; store a snapshot (value plus the source version) when a legal or business need requires the document to reproduce what was true at the time (payslips, decision letters). Snapshots are in erasure scope ([Decision: delete policy and the erasure exception](#decision-delete-policy-and-erasure)).
 
 **Accountability**: record who, when and why for each write; keep an append-only log when the record is a business fact (for example an assignment). See [Accountability options compared](#accountability-options).
 
@@ -610,12 +613,19 @@ Derived facts from another owner's events, for example `unit_id -> active employ
 
 ## Crosswalk table
 
-Maps an external code or entry to an internal ID, used for external reference sets where there is no stable code, or the organisation's definition differs from the external one ([External reference sets](#external-reference-sets)).
+Maps an external code or entry to an internal ID. Two uses:
+- **External reference sets** where there is no stable code, or the organisation's definition differs from the external one ([External reference sets](#external-reference-sets)).
+- **Legacy-system codes** for records migrated from a legacy system (for example an old HRIS unit code that appears in archived documents).
 
-**Columns** (illustrative): `internal_id`, `external_authority`, `external_code`, `external_edition`, `valid_from`, `valid_to`, `mapping_type` (exact, broader, narrower), `approved_by`.
+**Columns** (illustrative): `internal_id`, `external_authority` (authority or legacy system), `external_code`, `external_edition`, `valid_from`, `valid_to`, `mapping_type` (exact, broader, narrower), `approved_by`.
+
+**When a crosswalk, when not**
+- One legacy code per record, with no time validity: a plain attribute on the master is enough ([Edge case: business key vs ID](#edge-case-business-key-vs-id)).
+- Several legacy systems, or a mapping that changes over time: a crosswalk.
+- A mapping only one consumer needs (for example B's bank branch codes per unit): that consumer's local extension table keyed by the owner's ID, not a crosswalk.
 
 **Rules**
-- Owned by the reference set owner; changes need steward approval.
+- Owned and published by the entity's owner (for external sets, the reference set owner), so every module resolves a code the same way; changes need steward approval. Consumers do not build their own crosswalk for a code that more than one module uses.
 - Never delete a mapping: close it with `valid_to`.
 - Keep both definitions when they differ and map explicitly.
 
@@ -673,7 +683,7 @@ Table names show which module owns a table, what kind of table it is, and which 
 **Rules**
 - `Ref` is a prefix because it names a kind of table, not an owner.
 - A support table puts its owner's full name first and its role last. Sorted by name, an owner's tables sit together, and the role word stays fixed and searchable.
-- Use one role word per role across modules: `Level` (child rows of an aggregate), `Lineage` (`replaced_by` links for merge and split, see [Use case: merge](#uc-merge) and [Use case: split](#uc-split)), `ChangeEvent` (outbox, see [Flow: events plus read API](#flow-events-plus-read-api)), `History` (past versions, see [Accountability options compared](#accountability-options)).
+- Use one role word per role across modules: `Level` (child rows of an aggregate), `Lineage` (`replaced_by` links for merge and split, see [Use case: merge](#uc-merge) and [Use case: split](#uc-split)), `ChangeEvent` (outbox, see [Flow: events plus read API](#flow-events-plus-read-api)), `History` (past versions, see [Accountability options compared](#accountability-options)), `Crosswalk` (external or legacy codes, see [Crosswalk table](#table-crosswalk)).
 - Derived names follow the table name: the primary key column is `Id<Table>`, and constraints are `<kind><Module>_<Table>_<detail>` (`pkKmp_KompetensiLineage`, `fkKmp_KompetensiLineage_Lama`, `ixKmp_KompetensiLineage_Baru`).
 - A support table with its own business identity, which other tables reference on their own, is an entity table and takes `<Module>_<Entity>` (`Kmp_StandarKompetensiJabatan`, not `Kmp_JabatanStandarKompetensi`).
 
@@ -721,14 +731,19 @@ Evidence: outbox and delivery semantics are partly verified (Confluent, microser
 
 A new consumer, a rebuilt consumer, or a consumer that missed events uses the same path:
 
-1. Page through the owner's list endpoint with `updated_after` (or from the start), using opaque cursors.
-2. Apply each record through the normal version-guarded apply ([Rule: idempotent, version-guarded apply](#rule-idempotent-versioned-apply)).
-3. Switch to events, or begin consuming events during step 1 and rely on the version check to discard older data.
-4. Run reconciliation ([Flow: reconciliation](#flow-reconciliation)).
+1. Before the first page, record the event-stream position (or start consuming events).
+2. Page through the owner's list endpoint with `updated_after` (or from the start), using opaque cursors.
+3. Apply each record through the normal version-guarded apply ([Rule: idempotent, version-guarded apply](#rule-idempotent-versioned-apply)).
+4. Consume events from the position recorded in step 1. The version check discards anything older than what paging already applied.
+5. Run reconciliation ([Flow: reconciliation](#flow-reconciliation)).
+
+Do not subscribe only after paging ends: changes made during paging to records already paged past would be lost until reconciliation. The event channel must therefore retain events at least as long as a full bootstrap takes ([Technology requirements (neutral)](#technology-neutral-requirements)).
+
+**Cursor.** The owner sorts the list by (`updated_at`, `id`) and the opaque cursor encodes both. A cursor on `updated_at` alone skips rows that share a timestamp at a page boundary.
 
 Using one apply path for both bootstrap and events removes a class of divergence bugs. Details in [Use case: initial master broadcast to empty caches](#uc-initial-broadcast) and [Use case: late joiner, missed or out-of-order events](#uc-late-joiner-and-gaps).
 
-Snapshot-plus-change-feed bootstrap had no usable source in the research ([Source reliability](#source-reliability)); treat the ordering in step 3 as design reasoning.
+Snapshot-plus-change-feed bootstrap had no usable source in the research ([Source reliability](#source-reliability)); treat the ordering in steps 1 and 4 as design reasoning.
 
 <a id="flow-reconciliation"></a>
 
@@ -799,10 +814,10 @@ The guide does not pick products. Choose any technology that provides these capa
 | Capability | Requirement | Example (illustrative) |
 |---|---|---|
 | Atomic change plus outbox | Business change and outbox record in one local transaction | Relational transaction with an outbox table |
-| Event channel | At-least-once delivery; ordering per entity key; retention long enough for catch-up; consumer-side offset or equivalent | A message broker or log |
+| Event channel | At-least-once delivery; ordering per entity key; retention long enough for catch-up and at least as long as a full bootstrap; consumer-side offset or equivalent | A message broker or log |
 | Schema registry / contract store | Enforce compatibility; stored versions; FULL or FULL_TRANSITIVE preferred | A schema registry |
 | Request/response contract | Machine-readable, reviewed before implementation | An OpenAPI document |
-| Read API | Lookup by ID; cursor-paginated list with `updated_after` | REST or RPC |
+| Read API | Lookup by ID; cursor-paginated list with `updated_after`, sorted by (`updated_at`, `id`) | REST or RPC |
 | Error format | Standard, machine-readable | `application/problem+json` |
 | Idempotency | Idempotency key policy for retried writes (documented by the team; the IETF draft expired) | Header-based key |
 | Concurrency | Optimistic concurrency on writes | ETag with `If-Match` (412 on mismatch) |
@@ -823,7 +838,7 @@ Consumers get data only through the owner's contract ([Rule: additive-only contr
 
 ## Rule: additive-only contract
 
-**Safe changes**: add fields, endpoints, enum values.
+**Safe changes**: add optional fields (with a defined default or meaning when absent), endpoints, enum values.
 **Breaking changes**: remove, rename or retype a field; change resource names, value formats or defaults; add a new required field.
 
 Practices:
@@ -843,6 +858,7 @@ The consumer's only way to change a cache or projection.
 
 1. Read the event (or fetched record).
 2. In one transaction: compare `version` with stored `source_version`.
+   - No stored row: insert; treat the stored version as 0. A placeholder row stores no version, so the first real event or fetch fills it.
    - Greater: apply; store new version; record processed event ID.
    - Equal: duplicate; ignore.
    - Lower: late; ignore.
@@ -853,6 +869,7 @@ Properties:
 - Deleted or inactive state is a versioned state, so a stale update cannot resurrect a record ([Rule: deletes are explicit versioned states](#rule-deletes-as-state)).
 - Same path for events and for bootstrap or repair ([Flow: bootstrap and catch-up](#flow-bootstrap-and-catch-up)).
 - Unknown IDs on dependent events: store or fetch, do not drop silently.
+- An implementation as a bare `UPDATE ... WHERE source_version < version` updates zero rows when no row exists and loses the event; handle the insert explicitly.
 
 Storing the processed event ID in the same transaction as the change is the relational adaptation of the "commit state with offset" idea (inference).
 
@@ -921,7 +938,7 @@ Choice by consumer count is an inference. Sources were secondary ([Source reliab
 - **Validate the owner's payloads** instead of trusting them.
 - **Inventory interfaces and versions.**
 - **Idempotency keys** are high-entropy and cached under a composite key so one client cannot read another's cached response.
-- **Erasure**: when the owner deletes or anonymises a person, the change must reach every consumer's copy, including caches, projections, backups and logs. Applicable law (Indonesia's UU PDP, GDPR) was not researched; confirm with legal counsel.
+- **Erasure**: when the owner deletes or anonymises a person, the change must reach every consumer's copy, including caches, projections, backups and logs. The change carries a new version so version guards apply it; caches and projections take it through the apply path, and a tracked purge job covers logs, snapshots and backups. Applicable law (Indonesia's UU PDP, GDPR) was not researched; confirm with legal counsel.
 
 Design hook: erasure is the one case where a hard delete or anonymisation is allowed ([Decision: delete policy and the erasure exception](#decision-delete-policy-and-erasure)); [Accountability default (recommended)](#accountability-default) logs must be consistent with it.
 
@@ -940,7 +957,7 @@ What happens to each module type and table type in common situations. Split and 
 **Steps**
 1. Order the entities by dependency (referenced before referencing; see [Edge case: circular dependencies](#edge-case-circular-dependencies)).
 2. Owner populates its master with IDs and `version`.
-3. Consumers backfill through the list endpoint ([Flow: bootstrap and catch-up](#flow-bootstrap-and-catch-up)) or the owner replays current state as events (one event per record, current version).
+3. Consumers record the event-stream position, then backfill through the list endpoint ([Flow: bootstrap and catch-up](#flow-bootstrap-and-catch-up)), or the owner replays current state as events (one event per record, current version).
 4. Consumers apply through the idempotent path ([Rule: idempotent, version-guarded apply](#rule-idempotent-versioned-apply)).
 5. Reconcile ([Flow: reconciliation](#flow-reconciliation)).
 6. Only then enable validations that depend on the cache (for example assignments).
@@ -952,7 +969,7 @@ What happens to each module type and table type in common situations. Split and 
 
 **Effect by table type**: master gains rows; cache gains rows with `source_version`; transaction tables unchanged; projections are rebuilt ([Projection table](#table-projection)).
 
-**Edge cases**: records arriving before their parent (hierarchy: store, resolve later); large volume (page by cursor); events arriving mid-backfill (version guard discards older).
+**Edge cases**: records arriving before their parent (hierarchy: store, resolve later); large volume (page by cursor on `updated_at` plus `id`); events arriving mid-backfill (consumed from the recorded position; version guard discards older).
 
 <a id="uc-new-record"></a>
 
@@ -1006,7 +1023,7 @@ What happens to each module type and table type in common situations. Split and 
 **Rules**
 - The split mapping is rarely one-to-one for children; the owner's `replaced_by` states possible successors, not the distribution.
 - A consumer that stores quantities against the original (D's required headcount) needs a business decision, not an automatic rule.
-- Past records keep the original ID so history stays true.
+- Closed or past records keep the original ID, so history stays true. Open records are moved by the module that owns them: it closes the old record with `effective_to` and creates a new effective-dated one on a successor, with `previous_*` fields in its event. It never edits the old record in place. UIs follow `replaced_by` to link to successors.
 
 **Edge cases**: split in progress (successors created before the original is retired); partial reassignment; reversal (do not reuse the original; create a new record or [Use case: merge](#uc-merge)).
 
@@ -1028,6 +1045,7 @@ What happens to each module type and table type in common situations. Split and 
 - Projections: counts for absorbed units move after reassignments; show "as of".
 
 **Rules**
+- Closed or past records keep the absorbed ID, so history stays true. Open records are moved by the module that owns them: it closes the old record with `effective_to` and creates a new effective-dated one on the survivor, with `previous_*` fields in its event. It never edits the old record in place. UIs follow `replaced_by` to link to the survivor.
 - Never reuse the absorbed IDs. Resolve references through `replaced_by` chains (keep chain length bounded; resolve transitively).
 - A merge can be chained with later changes; consumers apply by version.
 
@@ -1049,9 +1067,10 @@ Policy: [Decision: delete policy and the erasure exception](#decision-delete-pol
 - Type 2: flag or close records with `effective_to`; do not delete.
 
 **Erasure (exception)**
-1. Owner anonymises in place or hard-deletes, and publishes a versioned erasure event.
-2. Every consumer applies it, including caches, projections, snapshots and logs.
-3. Reconcile to confirm.
+1. Owner anonymises in place (keeping the ID) or hard-deletes, and publishes an erasure event with a new version.
+2. Every consumer applies it to caches and projections through the version-guarded apply path.
+3. Each module's purge job, triggered by the same event, clears logs, outbox payloads, snapshots and backups, and reports completion.
+4. Reconcile to confirm.
 
 **Edge cases**: stale update after delete (rejected by version; state is retained); delete of an entity still referenced by open records (block or archive per business rule); resurrection by an old batch (version guard); consumer unreachable during erasure (queue; track completion).
 
@@ -1188,16 +1207,17 @@ Applies to B and D in [Worked example: modules A, B, C, D](#worked-example); for
 | Normal retirement | Status `inactive` or `terminated` | Reversible; history kept |
 | Merge / split | Status plus `replaced_by` | See [Use case: merge](#uc-merge), [Use case: split](#uc-split) |
 | Created in error | Mark `void`; hard delete only if never published | If published, treat as erasure |
-| Personal-data erasure | Anonymise fields in place and keep ID and version; or hard delete with an erasure event | Event must reach every copy; see below |
+| Personal-data erasure | Anonymise fields in place, keep the ID, issue a new version; or hard delete with an erasure event | Event must reach every copy; see below |
 
 **Erasure design options**
-- *Anonymise in place* (recommended starting point, proposal): replace personal fields with null/placeholder, keep the ID, status and version. Consumers apply it as a normal update, so no stale copy can resurrect the data, and references stay valid.
+- *Anonymise in place* (recommended starting point, proposal): replace personal fields with null/placeholder, keep the ID and status, and increment the version. Consumers apply it as a normal update, so no stale copy can resurrect the data, and references stay valid.
 - *Hard delete plus erasure event*: remove the row and send an event telling consumers to remove theirs. Use when the law or policy requires the identifier itself to go. Consumers must then handle dangling references ([Consumer type 1: reference data as attributes](#consumer-attribute-user), [Consumer type 2: reference data as index](#consumer-index-user)), and the "never reuse an ID" rule must still hold.
 
 **Required for either**
-- The erasure event is versioned and idempotent, and consumers apply it via [Rule: idempotent, version-guarded apply](#rule-idempotent-versioned-apply).
+- The erasure always carries a new version. An erasure at the stored version is ignored by every consumer's version guard as a duplicate, and the data stays.
+- Caches and projections erase through [Rule: idempotent, version-guarded apply](#rule-idempotent-versioned-apply), like any update.
+- Logs, outbox payloads, snapshots and backups are not reached by the apply path. A purge job in each module, triggered by the same erasure event, clears them ([Transaction table](#table-transaction) snapshots; [Accountability default (recommended)](#accountability-default) logs). Completion is tracked per consumer; ad-hoc scripts leave no record.
 - Reconciliation confirms no copy remains ([Flow: reconciliation](#flow-reconciliation)).
-- Logs, projections, backups and snapshots are in scope ([Transaction table](#table-transaction) snapshots; [Accountability default (recommended)](#accountability-default) logs).
 - Legal requirements (UU PDP, GDPR) were not researched; confirm with legal counsel ([Security and erasure propagation](#security-and-erasure-propagation)).
 
 Use case: [Use case: delete](#uc-delete).
@@ -1235,11 +1255,12 @@ For events, use schema compatibility in a registry ([Rule: additive-only contrac
 - [ ] Owner: ID format, versioning, outbox, events, read API, contract, sensitive-field scoping.
 - [ ] Consumer: apply path idempotent and version-guarded; adapter at the edge; unknown-ID handling.
 - [ ] Bootstrap and reconciliation planned.
+- [ ] Owner offline: the module keeps reading and validating from its cache; writes that need an unseen ID are rejected or held as pending, per business rule ([Edge case: owner unavailable](#edge-case-owner-unavailable)).
 
 **Lifecycle**
 - [ ] Statuses, `replaced_by`, effective dating defined; split/merge applicability decided.
 - [ ] Type 2 consumers have a review process for flagged records.
-- [ ] Erasure path defined ([Decision: delete policy and the erasure exception](#decision-delete-policy-and-erasure)).
+- [ ] Erasure path defined, including a tracked purge job for logs, snapshots and backups ([Decision: delete policy and the erasure exception](#decision-delete-policy-and-erasure)).
 
 **Governance**
 - [ ] Data dictionary entry and ADRs written ([Data dictionary and ADRs](#data-dictionary-and-adr)).

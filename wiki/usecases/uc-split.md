@@ -4,7 +4,7 @@ title: "Use case: split"
 tags: [proposal]
 sources: [osdm-integration-summary]
 created: 2026-10-09
-updated: 2026-10-09
+updated: 2026-10-21
 ---
 
 # Use case: split
@@ -24,6 +24,6 @@ updated: 2026-10-09
 **Rules**
 - The split mapping is rarely one-to-one for children; the owner's `replaced_by` states possible successors, not the distribution.
 - A consumer that stores quantities against the original (D's required headcount) needs a business decision, not an automatic rule.
-- Past records keep the original ID so history stays true.
+- Closed or past records keep the original ID, so history stays true. Open records are moved by the module that owns them: it closes the old record with `effective_to` and creates a new effective-dated one on a successor, with `previous_*` fields in its event. It never edits the old record in place. UIs follow `replaced_by` to link to successors.
 
 **Edge cases**: split in progress (successors created before the original is retired); partial reassignment; reversal (do not reuse the original; create a new record or [uc-merge](uc-merge.md)).
